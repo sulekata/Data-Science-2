@@ -1,0 +1,730 @@
+---
+title: "Online News Popularity"
+subtitle: "Kaggle Competition - Data Science 2 Course"
+author: "Kata Süle"
+date: '10th April 2021'
+output: html_document
+editor_options:
+   chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r}
+library(tidyverse)
+library(skimr)
+library(h2o)
+library(kableExtra)
+library(GGally)
+h2o.init()
+theme_set(theme_light())
+my_seed <- 20210409
+```
+
+## Executive summary
+
+The aim of this report was to build predictive models which can be used to predict whether a certain article on a website is going to be among the most popular ones. By using 44 features and training 6 different types of models: lasso, random forest, gradient boosting, xgboost, neural network and a stacked ensemble I managed to reach an AUC of 0.7 for the validation set. 
+
+## 1. Import and clean data
+
+The dataset contains information about articles which were published on [mashable.com](https://mashable.com/). The train set contains 27752, while the test set has 11892 observations. There are 60 features in total which show different characteristics of the articles such as the number of words they have or their sentiment. The aim was to predict whether an article is going to end up among the most popular articles on mashable.com based on the given features.
+
+```{r}
+# import data
+train <- read_csv("/Users/JAS/Documents/Kata/Kaggle competition/data/train.csv")
+test <- read_csv("/Users/JAS/Documents/Kata/Kaggle competition/data/test.csv")
+```
+
+After importing the data I checked whether the variable types were all correct. All variables were stored in a numeric format even though some of them were binary. I decided to convert the binary variables to two level factor variables. This included the outcome variable `is_popular` as well.
+
+```{r}
+# check variable types
+#str(train)
+#str(test)
+
+# convert binary variables to factor for train
+train <- train %>% mutate(
+  data_channel_is_lifestyle = factor(data_channel_is_lifestyle),
+  data_channel_is_entertainment = factor(data_channel_is_entertainment),
+  data_channel_is_bus = factor(data_channel_is_bus),
+  data_channel_is_socmed = factor(data_channel_is_socmed),
+  data_channel_is_tech = factor(data_channel_is_tech),
+  data_channel_is_world = factor(data_channel_is_world),
+  weekday_is_monday = factor(weekday_is_monday),
+  weekday_is_tuesday = factor(weekday_is_tuesday),
+  weekday_is_wednesday = factor(weekday_is_wednesday),
+  weekday_is_thursday = factor(weekday_is_thursday),
+  weekday_is_friday = factor(weekday_is_friday),
+  weekday_is_saturday = factor(weekday_is_saturday),
+  weekday_is_sunday = factor(weekday_is_sunday),
+  is_weekend = factor(is_weekend),
+  article_id = factor(article_id),
+)
+
+# convert binary variables to factor for test
+test <- test %>% mutate(
+  data_channel_is_lifestyle = factor(data_channel_is_lifestyle),
+  data_channel_is_entertainment = factor(data_channel_is_entertainment),
+  data_channel_is_bus = factor(data_channel_is_bus),
+  data_channel_is_socmed = factor(data_channel_is_socmed),
+  data_channel_is_tech = factor(data_channel_is_tech),
+  data_channel_is_world = factor(data_channel_is_world),
+  weekday_is_monday = factor(weekday_is_monday),
+  weekday_is_tuesday = factor(weekday_is_tuesday),
+  weekday_is_wednesday = factor(weekday_is_wednesday),
+  weekday_is_thursday = factor(weekday_is_thursday),
+  weekday_is_friday = factor(weekday_is_friday),
+  weekday_is_saturday = factor(weekday_is_saturday),
+  weekday_is_sunday = factor(weekday_is_sunday),
+  is_weekend = factor(is_weekend),
+  article_id = factor(article_id)
+)
+
+# convert outcome variable to a 2 level factor
+train <- train %>%
+  mutate(is_popular = factor(is_popular, levels = c(0,1)) %>%
+           recode(., `0` = 'no', `1` = "yes"))
+```
+
+Then I checked the number of missing values and I found that all observations were complete.
+
+```{r}
+# skim data
+skim(train)
+skim(test)
+```
+
+## 2. Feature engineering
+
+As for feature engineering I read through the variable descriptions to see which features might be redundant. Furthermore, to backup my decisions I inspected correlation between certain groups of variables.
+
+The plot below shows the correlation between polarity measures. Based on it I decided to exclude those ones which contain averages because they were highly correlated with the other features.
+
+```{r, fig.width=10, fig.align='center'}
+# check correlations between polarity measures
+ggcorr(subset(train,select = c(avg_positive_polarity,min_positive_polarity,max_positive_polarity, avg_negative_polarity,min_negative_polarity,max_negative_polarity)))
+```
+
+I also checked the correlation between the measures about keyword shares. Based on the plot below I decided to drop all those which contained averages.
+
+```{r, fig.width=10, fig.align='center'}
+# check correlations between keyword measures
+ggcorr(subset(train,select = c(kw_min_min, kw_max_min, kw_avg_min, kw_min_max, kw_max_max, kw_avg_max,kw_min_avg,kw_max_avg, kw_avg_avg)))
+```
+
+Lastly, I inspected the correlation between variables that contained information about the tokens of the articles. Based on the plot below I decided to exclude the number of unique tokens variable because the number of non-stop unique tokens variable was very close to it.
+
+```{r, fig.width=10, fig.align='center'}
+# check correlations between token measures
+ggcorr(subset(train,select = c(n_tokens_title, n_tokens_content, n_unique_tokens,n_non_stop_words, n_non_stop_unique_tokens)))
+```
+
+I found that the number of non-stop words was very close to 1 for almost all the observations in the train set. This would have meant that the articles barely contained stop words which seemed unnatural. Therefore I decided to exclude it.
+
+```{r}
+# n_non_stop_words is almost always 1 so I exclude it
+nrow(train %>% dplyr::filter(n_non_stop_words > 0.99))
+```
+
+As for the number of links to other articles on mashable.com I decided to turn it into a ratio instead of a simple number. So I divided it by the number of total references that the articles had. In case they did not have any references I set the value of the ratio to 0.
+
+```{r}
+# add the links to Mashable.com as the percentage of the total links in the article
+train <- train %>% mutate(
+  perc_self_hrefs = ifelse( num_hrefs == 0, 0, num_self_hrefs / num_hrefs)
+  )
+
+test <- test %>% mutate(
+  perc_self_hrefs = ifelse( num_hrefs == 0, 0, num_self_hrefs / num_hrefs)
+  )
+```
+
+In the next step I dropped all the variables I identified above plus two more: `rate_negative_words` and `is_weekend`. As for the first one I decided to exclude it because together with the `rate_positive_words` it summed up to one. As for the second one I dropped it because there were dummy variables for Saturday and Sunday separately and I decided to use those.
+
+```{r}
+# list of variables to drop
+# based on either variable understanding or inspection
+to_drop <- c("rate_negative_words", "abs_title_subjectivity", "abs_title_sentiment_polarity", "avg_positive_polarity", "avg_negative_polarity", "is_weekend", "self_reference_avg_sharess", "kw_min_avg", "kw_max_avg", "kw_avg_avg", "kw_avg_min", "kw_avg_max","num_self_hrefs", "n_non_stop_words", "n_unique_tokens")
+
+# drop variables
+train <- subset(train, select = setdiff(names(train), to_drop))
+test <- subset(test, select = setdiff(names(test), to_drop))
+```
+
+Then I checked the minimums of the remaining features because some of them were ratios or some kind of measure which cannot be lower than 0.
+
+```{r}
+# check the variables which have lower minimums than 0 because some of them should not be negative
+df <- Filter(is.numeric, train)
+for (col in names(df)){
+  min <- min(df[,col])
+  if (min < 0){
+   print(c(col, min)) 
+  } else {
+    next
+  }
+}
+```
+
+Since the `kw_min_min` variable is about number of shares it cannot go below 0. I checked and it was less than 0 for more than 50% of the observations therefore I decided to drop it because I did not want to fill in all those observations with 0.
+
+```{r}
+# number of shares cannot be negative
+# it is negative for more than 50% of the observations so I drop this variable
+nrow(train %>% dplyr::filter(kw_min_min < 0))
+
+train <- subset(train, select = setdiff(names(train), "kw_min_min"))
+test <- subset(test, select = setdiff(names(test), "kw_min_min"))
+```
+
+As the last step of feature engineering I took logs of variables which had a skewed distribution with a long right tail.
+
+```{r}
+# add logs of skewed features to train
+train <- train %>% mutate(
+  log_n_tokens_content = ifelse(n_tokens_content == 0, log(n_tokens_content+1), log(n_tokens_content)),
+  log_n_non_stop_unique_tokens = ifelse(n_non_stop_unique_tokens == 0, log(n_non_stop_unique_tokens+1), log(n_non_stop_unique_tokens)),             
+  log_num_hrefs = ifelse(num_hrefs == 0, log(num_hrefs+1), log(num_hrefs)),           
+  log_num_imgs = ifelse(num_imgs == 0, log(num_imgs+1), log(num_imgs)), 
+  log_num_videos = ifelse(num_videos == 0, log(num_videos+1), log(num_videos)),
+  log_kw_max_min = ifelse(kw_max_min == 0, log(kw_max_min+1), log(kw_max_min)),   
+  log_kw_min_max = ifelse(kw_min_max == 0, log(kw_min_max+1), log(kw_min_max)),
+  log_self_reference_min_shares = ifelse(self_reference_min_shares == 0, log(self_reference_min_shares+1), log(self_reference_min_shares)),
+  log_self_reference_max_shares = ifelse(self_reference_max_shares == 0, log(self_reference_max_shares+1), log(self_reference_max_shares)),
+  log_LDA_00 = ifelse(LDA_00 == 0, log(LDA_00+ mean(LDA_00)/2), log(LDA_00)),
+  log_LDA_01 = ifelse(LDA_01 == 0, log(LDA_01+ mean(LDA_01)/2), log(LDA_01)),
+  log_LDA_02 = ifelse(LDA_02 == 0, log(LDA_02+ mean(LDA_02)/2), log(LDA_02)),
+  log_LDA_03 = ifelse(LDA_03 == 0, log(LDA_03+ mean(LDA_03)/2), log(LDA_03)),
+  log_LDA_04 = ifelse(LDA_04 == 0, log(LDA_04+ mean(LDA_04)/2), log(LDA_04)),
+  log_global_rate_negative_words = ifelse(global_rate_negative_words == 0, log(global_rate_negative_words+ mean(global_rate_negative_words)/2), log(global_rate_negative_words)),
+  log_min_positive_polarity = ifelse(min_positive_polarity == 0, log(min_positive_polarity+mean(min_positive_polarity)/2), log(min_positive_polarity))
+)
+
+# add logs of skewed features to test
+test <- test %>% mutate(
+  log_n_tokens_content = ifelse(n_tokens_content == 0, log(n_tokens_content+1), log(n_tokens_content)),
+  log_n_non_stop_unique_tokens = ifelse(n_non_stop_unique_tokens == 0, log(n_non_stop_unique_tokens+1), log(n_non_stop_unique_tokens)),             
+  log_num_hrefs = ifelse(num_hrefs == 0, log(num_hrefs+1), log(num_hrefs)),           
+  log_num_imgs = ifelse(num_imgs == 0, log(num_imgs+1), log(num_imgs)), 
+  log_num_videos = ifelse(num_videos == 0, log(num_videos+1), log(num_videos)),
+  log_kw_max_min = ifelse(kw_max_min == 0, log(kw_max_min+1), log(kw_max_min)),   
+  log_kw_min_max = ifelse(kw_min_max == 0, log(kw_min_max+1), log(kw_min_max)),
+  log_self_reference_min_shares = ifelse(self_reference_min_shares == 0, log(self_reference_min_shares+1), log(self_reference_min_shares)),
+  log_self_reference_max_shares = ifelse(self_reference_max_shares == 0, log(self_reference_max_shares+1), log(self_reference_max_shares)),
+  log_LDA_00 = ifelse(LDA_00 == 0, log(LDA_00+ mean(LDA_00)/2), log(LDA_00)),
+  log_LDA_01 = ifelse(LDA_01 == 0, log(LDA_01+ mean(LDA_01)/2), log(LDA_01)),
+  log_LDA_02 = ifelse(LDA_02 == 0, log(LDA_02+ mean(LDA_02)/2), log(LDA_02)),
+  log_LDA_03 = ifelse(LDA_03 == 0, log(LDA_03+ mean(LDA_03)/2), log(LDA_03)),
+  log_LDA_04 = ifelse(LDA_04 == 0, log(LDA_04+ mean(LDA_04)/2), log(LDA_04)),
+  log_global_rate_negative_words = ifelse(global_rate_negative_words == 0, log(global_rate_negative_words+ mean(global_rate_negative_words)/2), log(global_rate_negative_words)),
+  log_min_positive_polarity = ifelse(min_positive_polarity == 0, log(min_positive_polarity+mean(min_positive_polarity)/2), log(min_positive_polarity))
+)
+```
+
+## 3. Create predictor sets
+
+In total I created 4 predictor sets. One with all the variables except for `article_id` in their level format, one with all the variables in their level format, one with all the variables except for `article_id` with the logarithmically transformed variables and one with the same variables plus the `article_id`.
+
+```{r}
+# create predictor sets
+y <- 'is_popular'
+x_level <- setdiff(names(train[, 1:45]), c("is_popular", "article_id"))
+x_level2 <- setdiff(names(train[, 1:45]), c("is_popular")) 
+x_log <- setdiff(names(train), c("is_popular", "article_id", "n_tokens_content", "n_non_stop_unique_tokens", "num_hrefs", "num_imgs", "num_videos", "kw_max_min", "kw_min_max", "self_reference_min_shares", "self_reference_max_shares", "LDA_00", "LDA_01", "LDA_02", "LDA_03", "LDA_04", "global_rate_negative_words", "min_positive_polarity"))
+x_log2 <- c(x_log, "article_id")
+```
+
+## 4. Modelling
+
+I trained 6 types of models: a lasso model, a random forest model, an gradient boosting model, an xgboost model, a neural network model and a stacked ensemble model. I experimented with the different predictor sets to see which one resulted in better predictive power and I used five fold cross-validation to avoid overfitting. To train the models I used the `h2o` package because my computer would not have had the necessary power to run grid searches with `caret`. 
+
+#### a. Split training data into train and validation sets
+
+Before I started to train models I split the train set into training and validation sets with 80% and 20% of the observations respectively. I decided to keep a validation set so that I can measure the performance of my models before I upload a submission to Kaggle.
+
+```{r}
+# split the training data into training and validation samples
+data_split <- h2o.splitFrame(as.h2o(train), ratios = 0.8, seed = my_seed)
+data_train <- data_split[[1]]
+data_valid <- data_split[[2]]
+
+# convert test data to h2o frame
+data_test <- as.h2o(test)
+```
+
+#### b. Lasso model
+
+As for the lasso model I set the `lambda_search` parameter to true which meant that during the training many different values were tried and then the one resulting in the lowest cross-validated error was chosen. After training the model I saved it locally so that when I would knit the .rmd file I do not have to train it again just import it from the file. I followed this process for all the other models as well. I printed the lambda value for the final model and checked its AUC measure for the training, the cross-validation and the validation sets. This helped me to see whether the model was overfitted. Then I calculated the predictions for the test set, saved it to a .csv file and uploaded to Kaggle.
+
+```{r}
+#### LASSO MODEL
+
+# train lasso model with lambda search
+# lasso_model <- h2o.glm(
+#   x_log2, y,
+#   training_frame = data_train,
+#   model_id = "lasso_model",
+#   family = "binomial",
+#   alpha = 1,
+#   lambda_search = TRUE,
+#   seed = my_seed,
+#   nfolds = 5,
+#   validation_frame = data_valid,
+#   keep_cross_validation_predictions = TRUE
+# )
+
+# save model to file
+# model_path <- h2o.saveModel(object = lasso_model, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+
+# import model from file
+best_lasso <- h2o.loadModel("/Users/JAS/Documents/Kata/Kaggle competition/models/lasso_model")
+
+# get best lambda
+best_lasso@model$lambda_best
+
+# get AUC for best lambda
+lasso_auc <- h2o.auc(best_lasso, train = TRUE, xval = TRUE, valid = TRUE)
+
+# prediction for test set
+#prediction <- h2o.predict(best_lasso, newdata = data_test)
+
+# bind predictions with article id-s
+#solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+
+# rename columns
+#colnames(solution) <- c('article_id', 'score')
+
+# write to csv
+#write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_lasso.csv')
+```
+
+#### c. Random forest model
+
+As for the random forest model I used the grid search to find the best parameter combination and then ran one model with the best combination separately and saved it locally again. I calculated the AUC just like for the lasso model and then calculated the predictions on the test set.
+
+```{r, include=FALSE}
+### RANDOM FOREST MODEL with h2o
+
+# # create parameter grid
+# rf_params <- list(
+#   ntrees = c(100, 200, 300), # number of trees grown
+#   mtries = c(8, 10, 15), # number of variables to choose at each split
+#   sample_rate = c(0.2, 0.632), # sample rate for the bootstrap samples
+#   max_depth = c(10, 20) # depth of the trees
+# )
+# 
+# # train model
+# rf_grid <- h2o.grid(
+#   "randomForest",
+#   x = x_level2, y = y,
+#   training_frame = data_train,
+#   grid_id = "rf_grid",
+#   nfolds = 5,
+#   seed = my_seed,
+#   hyper_params = rf_params,
+#   validation_frame = data_valid,
+#   keep_cross_validation_predictions = TRUE
+# )
+# 
+# # check AUC for different parameters
+# h2o.getGrid(rf_grid@grid_id, sort_by = "auc", decreasing = TRUE)
+# 
+# # save best rf model
+# best_rf <- h2o.getModel(
+#   h2o.getGrid(rf_grid@grid_id, sort_by = "auc", decreasing = TRUE)@model_ids[[1]]
+# )
+# 
+# # save model to file
+# model_path <- h2o.saveModel(object = best_rf, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+# 
+# # import model from file
+# best_rf <- h2o.loadModel(model_path)
+# 
+# # get AUC for best rf model
+# rf_auc <- h2o.auc(best_rf, train = TRUE, xval = TRUE, valid = TRUE)
+# 
+# # prediction for test set
+# prediction <- h2o.predict(best_rf, newdata = data_test)
+# 
+# # bind predictions with article id-s
+# solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+# 
+# # rename columns
+# colnames(solution) <- c('article_id', 'score')
+# 
+# # write to csv
+# write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_rf.csv')
+# 
+# # create summary table of final parameters
+# sum_table <- h2o.getGrid(rf_grid@grid_id, "auc")@summary_table
+# sum_table <- sum_table %>% filter(auc == max(auc)) %>% select(c(max_depth, mtries, ntrees, sample_rate))
+# 
+# # print table
+# knitr::kable(sum_table, caption = "Parameters of best random forest model", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+```{r}
+### RANDOM FOREST MODEL
+
+# train model
+# rf_model <- h2o.randomForest(
+#   x = x_log2, y = y,
+#   training_frame = data_train,
+#   model_id = "rf_model",
+#   nfolds = 5,
+#   seed = my_seed,
+#   ntrees = 200, # number of trees grown
+#   mtries = 15, # number of variables to choose at each split
+#   sample_rate = 0.632, # sample rate for the bootstrap samples
+#   max_depth = 20, # depth of the trees
+#   validation_frame = data_valid,
+#   keep_cross_validation_predictions = TRUE
+# )
+
+# save model to file
+#model_path <- h2o.saveModel(object = rf_model, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+
+# import model from file
+best_rf <- h2o.loadModel("/Users/JAS/Documents/Kata/Kaggle competition/models/rf_model")
+
+# get AUC for best rf model
+rf_auc <- h2o.auc(best_rf, train = TRUE, xval = TRUE, valid = TRUE)
+
+# prediction for test set
+#prediction <- h2o.predict(best_rf, newdata = data_test)
+
+# bind predictions with article id-s
+#solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+
+# rename columns
+#colnames(solution) <- c('article_id', 'score')
+
+# write to csv
+#write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_rf.csv')
+```
+
+I checked the variable importance plot for the model and experimented with excluding those variables from the predictor set which had an importance lower than 0.05. It was interesting to see that `article_id` had a very high importance even though I did not expect it.
+
+```{r, fig.align='center'}
+# check variable importance
+h2o.varimp_plot(best_rf)
+rf_varimp <- h2o.varimp(best_rf)
+rf_varimp <- rf_varimp %>% filter(scaled_importance < 0.05)
+
+x_log_rf <- setdiff(x_log2, c("data_channel_is_bus"))
+```
+
+#### d. Gradient boosting model
+
+When I trained the gradient boosting model I followed the same process as for the random forest model. I used the grid search first and then ran a model separately with the best parameters. Then I saved the model, checked the AUC values and calculated the predcition.
+
+```{r, include=FALSE}
+# GBM
+# create parameter grid
+# gbm_params <- list(
+#   learn_rate = c(0.01, 0.05, 0.1, 0.3),
+#   ntrees = c(10, 50, 100, 300),
+#   max_depth = c(2, 5),
+#   sample_rate = c(0.2, 0.5, 0.8, 1)
+# )
+# 
+# # train model
+# gbm_grid <- h2o.grid(
+#   "gbm", x = X3, y = y,
+#   grid_id = "gbm_grid",
+#   training_frame = data_train,
+#   nfolds = 5,
+#   seed = my_seed,
+#   hyper_params = gbm_params,
+#   validation_frame = data_valid,
+#   keep_cross_validation_predictions = TRUE
+# )
+# 
+# # check AUC for different parameters
+# h2o.getGrid(gbm_grid@grid_id, sort_by = "auc", decreasing = TRUE)
+# 
+# # save best gbm model
+# best_gbm <- h2o.getModel(
+#   h2o.getGrid(gbm_grid@grid_id, sort_by = "auc", decreasing = TRUE)@model_ids[[1]]
+# )
+# 
+# # save model to file
+# model_path <- h2o.saveModel(object = best_gbm, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+# 
+# # import model from file
+# best_gbm <- h2o.loadModel(model_path)
+# 
+# # get AUC for best gbm model
+# gbm_auc <- h2o.auc(best_gbm, train = TRUE, xval = TRUE, valid = TRUE)
+# 
+# # prediction for test set
+# prediction <- h2o.predict(best_gbm, newdata = data_test)
+# 
+# # bind predictions with article id-s
+# solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+# 
+# # rename columns
+# colnames(solution) <- c('article_id', 'score')
+# 
+# # write to csv
+# write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_gbm.csv')
+# 
+# # create summary table of final parameters
+# sum_table <- h2o.getGrid(gbm_grid@grid_id, "auc")@summary_table
+# sum_table <- sum_table %>% filter(auc == max(auc)) %>% select(c(learn_rate, max_depth, ntrees, sample_rate))
+# 
+# # print table
+# knitr::kable(sum_table, caption = "Parameters of best GBM model", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+```{r}
+# GBM
+# train model
+# gbm_model <- h2o.gbm(
+#   x = x_log2, y = y,
+#   model_id = "gbm_model",
+#   training_frame = data_train,
+#   nfolds = 5,
+#   seed = my_seed,
+#   learn_rate = 0.05,
+#   ntrees = 300,
+#   max_depth = 3,
+#   #sample_rate = c(0.2, 0.5, 0.8, 1),
+#   validation_frame = data_valid,
+#   keep_cross_validation_predictions = TRUE
+# )
+
+# save model to file
+#model_path <- h2o.saveModel(object = gbm_model, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+
+# import model from file
+best_gbm <- h2o.loadModel("/Users/JAS/Documents/Kata/Kaggle competition/models/gbm_model")
+
+# get AUC for best gbm model
+gbm_auc <- h2o.auc(best_gbm, train = TRUE, xval = TRUE, valid = TRUE)
+
+# prediction for test set
+#prediction <- h2o.predict(best_gbm, newdata = data_test)
+
+# bind predictions with article id-s
+#solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+
+# rename columns
+#colnames(solution) <- c('article_id', 'score')
+
+# write to csv
+#write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_gbm.csv')
+```
+
+Then just like with the random forest model I checked the variable importances and I dropped features which had an importance lower than 0.01 to see whether this could improve the model. It was interesting to see that `article_id` had a very high importance even though I did not expect it.
+
+```{r, fig.align='center'}
+# check variable importance
+h2o.varimp_plot(best_gbm)
+gbm_varimp <- h2o.varimp(best_gbm)
+gbm_varimp <- gbm_varimp %>% filter(scaled_importance < 0.01)
+
+x_log_gbm <- setdiff(x_log2, c("weekday_is_monday", "weekday_is_friday", "weekday_is_thursday", "weekday_is_wednesday"))
+```
+
+#### e. XGBoost model
+
+I experimented with different parameter settings for the xgboost model as well. I saved the best one, calculated the AUC values and then the predictions.
+
+```{r}
+# GBM
+# train model
+# xgboost_model <- h2o.xgboost(
+#   x = x_log_xgboost, y = y,
+#   model_id = "xgboost_model",
+#   training_frame = data_train,
+#   nfolds = 5,
+#   seed = my_seed,
+#   learn_rate = 0.07,
+#   ntrees = 300,
+#   max_depth = 2,
+#   sample_rate = 0.5,
+#   validation_frame = data_valid,
+#   keep_cross_validation_predictions = TRUE
+# )
+
+# save model to file
+#model_path <- h2o.saveModel(object = xgboost_model, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+
+# import model from file
+best_xgboost <- h2o.loadModel("/Users/JAS/Documents/Kata/Kaggle competition/models/xgboost_model")
+
+# get AUC for best gbm model
+xgboost_auc <- h2o.auc(best_xgboost, train = TRUE, xval = TRUE, valid = TRUE)
+
+# prediction for test set
+#prediction <- h2o.predict(best_xgboost, newdata = data_test)
+
+# bind predictions with article id-s
+#solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+
+# rename columns
+#colnames(solution) <- c('article_id', 'score')
+
+# write to csv
+#write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_xgboost.csv')
+```
+
+Then just like before I checked the variable importance and filtered the features with an importance lower than 0.01 and checked whether it improved performance.
+
+```{r, fig.align='center'}
+# check variable importance
+h2o.varimp_plot(best_xgboost)
+xgboost_varimp <- h2o.varimp(best_xgboost)
+xgboost_varimp <- xgboost_varimp %>% filter(scaled_importance < 0.01)
+
+x_log_xgboost <- setdiff(x_log2, c("kw_max_max", "data_channel_is_world", "weekday_is_friday", "weekday_is_thursday"))
+```
+
+In general, for the tree-based models it was important not to train too many trees because that led to overfitting.
+
+#### f. Neural network model
+
+As for the neural network model I experimented with different parameter settings. The final model had two hidden layers and used dropout rates of 0.6 and 0.5. I saved the best model, checked the AUC values and calculated predictions.
+
+```{r}
+### NEURAL NETWORK MODEL
+
+# train model
+# nn_model <- h2o.deeplearning(
+#   x_log2, y,
+#   training_frame = data_train,
+#   model_id = "nn_model",
+#   standardize = TRUE,
+#   hidden = c(50, 20),
+#   seed = my_seed,
+#   nfolds = 5,
+#   validation_frame = data_valid,
+#   activation = "RectifierWithDropout",
+#   epochs = 30,
+#   mini_batch_size = 10,
+#   hidden_dropout_ratios = c(0.6, 0.5),
+#   keep_cross_validation_predictions = TRUE
+# )
+
+# save model to file
+#model_path <- h2o.saveModel(object = nn_model, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+
+# import model from file
+best_nn <- h2o.loadModel("/Users/JAS/Documents/Kata/Kaggle competition/models/nn_model")
+
+# get AUC for best neural network model
+nn_auc <- h2o.auc(best_nn, train = TRUE, xval = TRUE, valid = TRUE)
+
+# prediction for test set
+#prediction <- h2o.predict(best_nn, newdata = data_test)
+
+# bind predictions with article id-s
+#solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+
+# rename columns
+#colnames(solution) <- c('article_id', 'score')
+
+# write to csv
+#write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_nn.csv')
+```
+
+#### g. Stacked model
+
+Lastly, I built a stacked ensemble model in which I combined all the previously built models and used glm as the meta learner. The way the stacked model works is that it fits a model on the predictions of other models to improve predictive performance. It works best when the base learner models are not highly correlated.
+
+Just like before I saved the model, checked the AUC values and calculated predictions.
+
+```{r}
+### STACKED MODEL
+
+# save models to a list
+base_learners <- list(
+  best_lasso, best_rf, best_gbm, best_xgboost, best_nn
+)
+
+# stacked ensemble model with glm as the meta learner
+# ensemble_model <- h2o.stackedEnsemble(
+#   x_log2, y,
+#   model_id = "stacked_model",
+#   training_frame = data_train,
+#   base_models = base_learners,
+#   validation_frame = data_valid,
+#   seed = my_seed,
+#   metalearner_nfolds = 5
+# )
+
+# save model to file
+#model_path <- h2o.saveModel(object = ensemble_model, path = "/Users/JAS/Documents/Kata/Kaggle competition/models/", force = TRUE)
+
+# import model from file
+best_stacked <- h2o.loadModel("/Users/JAS/Documents/Kata/Kaggle competition/models/StackedEnsemble_model_R_1616151557052_270669")
+
+# get AUC for best stacked model
+stacked_auc <- h2o.auc(best_stacked, train = TRUE, xval = TRUE, valid = TRUE)
+
+# prediction for test set
+#prediction <- h2o.predict(best_stacked, newdata = data_test)
+
+# bind predictions with article id-s
+#solution <- cbind(test[, 'article_id'], as.data.frame(prediction[, 3]))
+
+# rename columns
+#colnames(solution) <- c('article_id', 'score')
+
+# write to csv
+#write_csv(solution, '/Users/JAS/Documents/Kata/Kaggle competition/submissions/best_stacked.csv')
+```
+
+## 5. Model comparison
+
+Below is a comparison table of the performances of all the models. We can see that the model with the best performance is the stacked model. It has the highest cross-validated and validation AUC.
+
+```{r}
+### MODEL COMPARISON
+# save models to a list
+my_models <- list(
+  best_lasso, best_rf, best_gbm, best_xgboost, best_nn, best_stacked
+)
+
+# create table with AUC values for different models
+auc_on_valid <- map_df(my_models, ~{
+  tibble(model = .@model_id, RMSE = h2o.rmse(., xval = TRUE), AUC_xval = h2o.auc(., xval = TRUE), AUC_valid = h2o.auc(h2o.performance(., data_valid)))
+}) %>% arrange(AUC_valid)
+
+names(auc_on_valid) <- c("Model", "Cross-validated RMSE","Cross-validated AUC", "Validation AUC")
+
+auc_on_valid <- auc_on_valid %>% mutate( Model = ifelse(Model == "StackedEnsemble_model_R_1616151557052_270669", "stacked_model", Model))
+
+# print table
+knitr::kable( auc_on_valid, caption = "Performance comparison of all models", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+Below I plotted the ROC curve for the best performing model which was the stacked model. We can conclude that there is room for improvement since the curve is relatively close to the 45 degree line.
+
+```{r, fig.align='center'}
+# plot ROC curve for best model
+# function to get performance metrics for the plot
+getPerformanceMetrics <- function(model, newdata = NULL, xval = FALSE) {
+  h2o.performance(model, newdata = newdata, xval = xval)@metrics$thresholds_and_metric_scores %>%
+    as_tibble() %>%
+    mutate(model = model@model_id)
+}
+
+# calculate performance metrics
+best_performance <- getPerformanceMetrics(best_stacked, xval = TRUE)
+
+# create plot
+ggplot(best_performance, aes(fpr, tpr)) +
+    geom_path(color = "darkblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    coord_fixed() +
+    labs(x = "False Positive Rate", y = "True Positive Rate", title = "ROC curve for best model")
+```
+

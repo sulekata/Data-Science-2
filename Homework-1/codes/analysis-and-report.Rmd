@@ -1,0 +1,728 @@
+---
+title: "Homework 1"
+subtitle: "Data Science 2 Course"
+author: "Kata Sule"
+date: "19th March 2021"
+output: html_document
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library(h2o)
+library(ISLR)
+library(skimr)
+library(data.tree)
+library(DiagrammeR)
+library(kableExtra)
+library(janitor)
+h2o.init()
+theme_set(theme_light())
+my_seed <- 20210316
+```
+
+## 1. Tree ensemble models
+
+```{r, include=FALSE}
+# import data
+data <- as_tibble(ISLR::OJ)
+
+# check variable types
+str(data)
+
+# transform some variables from numeric to factor
+data <- data %>% mutate(
+  WeekofPurchase = factor(WeekofPurchase),
+  StoreID = factor(StoreID),
+  SpecialCH = factor(SpecialCH),
+  SpecialMM = factor(SpecialMM),
+  STORE = factor(STORE)
+)
+
+# skim data
+skim(data)
+# there are no missing values
+
+# take log of very skewed variables
+data <- data %>% mutate(
+  log_disc_ch = ifelse(DiscCH == 0, log(DiscCH+1), log(DiscCH)),
+  log_disc_mm = ifelse(DiscMM == 0, log(DiscMM+1), log(DiscMM)),
+  log_pctdisc_ch = ifelse(PctDiscCH == 0, log(PctDiscCH+1), log(PctDiscCH)),
+  log_pctdisc_mm = ifelse(PctDiscMM == 0, log(PctDiscMM+1), log(PctDiscMM))
+)
+
+# inspect store and storeid variables
+table(data$STORE)
+table(data$StoreID)
+# they are the same so I am only going to use StoreID
+# the StoreID variable makes the Store7 variable redundant as well
+
+# create predictor sets to estimate models
+y <- "Purchase"
+X1 <- c("WeekofPurchase", "StoreID", "PriceCH", "PriceMM", "DiscCH", "DiscMM", "SpecialCH", "SpecialMM", "LoyalCH", "PriceDiff")
+X2 <- c("WeekofPurchase", "StoreID", "PriceCH", "PriceMM", "DiscCH", "DiscMM", "SpecialCH", "SpecialMM", "LoyalCH", "SalePriceMM", "SalePriceCH", "PriceDiff", "PctDiscMM", "PctDiscCH",  "ListPriceDiff")
+X3 <- c("StoreID", "PriceCH", "PriceMM", "DiscCH", "DiscMM", "SpecialCH", "SpecialMM", "LoyalCH", "SalePriceMM", "SalePriceCH", "PriceDiff", "PctDiscMM", "PctDiscCH",  "ListPriceDiff")
+X4 <- c("StoreID", "PriceCH", "PriceMM", "log_disc_ch", "log_disc_mm", "SpecialCH", "SpecialMM", "LoyalCH", "SalePriceMM", "SalePriceCH", "PriceDiff", "log_pctdisc_ch", "log_pctdisc_mm",  "ListPriceDiff")
+```
+
+### a) Create a training data of 75% and keep 25% of the data as a test set. Train a decision tree as a benchmark model. Plot the final model and interpret the result (using rpart and rpart.plot is an easier option).
+
+I created different predictor sets and after I split the data into training and test sets I experimented with these. The best set had 14 variables which were all level. I excluded the `STORE` variable because it was identical to the `StoreID`, furthermore I excluded the `Store7` variable because the `StoreID` made it redundant. Lastly, I dropped the `WeekofPurchase` variable as well because it had too many outcomes compared to the size of the data set.
+
+```{r, include=FALSE}
+# split the data into training and test samples
+data_split <- h2o.splitFrame(as.h2o(data), ratios = 0.75, seed = my_seed)
+data_train <- data_split[[1]]
+data_test <- data_split[[2]]
+```
+
+```{r, include=FALSE}
+# train a decision tree
+base_tree <- h2o.randomForest(
+  X3, y,
+  training_frame = data_train,
+  model_id = "base_tree",
+  ntrees = 1, mtries = length(X3), sample_rate = 1,
+  max_depth = 3,
+  nfolds = 5,
+  seed = my_seed
+)
+#base_tree
+
+# predictor sets X3 and X4 had the best performance
+# since their performances were the same I choose X3 since it does not have transformed variables
+
+# get AUC for base_tree model
+tree_auc <- h2o.auc(base_tree, train = TRUE, xval = TRUE)
+```
+
+```{r, include=FALSE}
+# function to plot the tree
+# source: https://www.h2o.ai/blog/finally-you-can-plot-h2o-decision-trees-in-r/
+createDataTree <- function(h2oTree) {
+  h2oTreeRoot = h2oTree@root_node
+  dataTree = Node$new(h2oTreeRoot@split_feature)
+  dataTree$type = 'split'
+  addChildren(dataTree, h2oTreeRoot)
+  return(dataTree)
+}
+
+addChildren <- function(dtree, node) {
+  
+  if(class(node)[1] != 'H2OSplitNode') return(TRUE)
+  
+  feature = node@split_feature
+  id = node@id
+  na_direction = node@na_direction
+  
+  if(is.na(node@threshold)) {
+    leftEdgeLabel = printValues(node@left_levels, 
+                                na_direction=='LEFT', 4)
+    rightEdgeLabel = printValues(node@right_levels, 
+                                 na_direction=='RIGHT', 4)
+  }else {
+    leftEdgeLabel = paste("<", node@threshold, 
+                          ifelse(na_direction=='LEFT',',NA',''))
+    rightEdgeLabel = paste(">=", node@threshold, 
+                           ifelse(na_direction=='RIGHT',',NA',''))
+  }
+  
+  left_node = node@left_child
+  right_node = node@right_child
+  
+  if(class(left_node)[[1]] == 'H2OLeafNode')
+    leftLabel = paste("prediction:", left_node@prediction)
+  else
+    leftLabel = left_node@split_feature
+  
+  if(class(right_node)[[1]] == 'H2OLeafNode')
+    rightLabel = paste("prediction:", right_node@prediction)
+  else
+    rightLabel = right_node@split_feature
+  
+  if(leftLabel == rightLabel) {
+    leftLabel = paste(leftLabel, "(L)")
+    rightLabel = paste(rightLabel, "(R)")
+  }
+  
+  dtreeLeft = dtree$AddChild(leftLabel)
+  dtreeLeft$edgeLabel = leftEdgeLabel
+  dtreeLeft$type = ifelse(class(left_node)[1] == 'H2OSplitNode', 'split', 'leaf')
+  
+  dtreeRight = dtree$AddChild(rightLabel)
+  dtreeRight$edgeLabel = rightEdgeLabel
+  dtreeRight$type = ifelse(class(right_node)[1] == 'H2OSplitNode', 'split', 'leaf')
+  
+  addChildren(dtreeLeft, left_node)
+  addChildren(dtreeRight, right_node)
+  
+  return(FALSE)
+}
+
+printValues <- function(values, is_na_direction, n=4) {
+  l = length(values)
+  if(l == 0)
+    value_string = ifelse(is_na_direction, "NA", "")
+  else
+    value_string = paste0(paste0(values[1:min(n,l)], collapse = ', '),
+                          ifelse(l > n, ",...", ""),
+                          ifelse(is_na_direction, ", NA", ""))
+  return(value_string)
+}
+```
+
+```{r}
+# plot the tree
+juiceH2oTree = h2o.getModelTree(model = base_tree, tree_number = 1)
+
+juiceDataTree = createDataTree(juiceH2oTree)
+
+GetEdgeLabel <- function(node) {return (node$edgeLabel)}
+GetNodeShape <- function(node) {switch(node$type, 
+                                       split = "diamond", leaf = "oval")}
+GetFontName <- function(node) {switch(node$type, 
+                                      split = 'Palatino-bold', 
+                                      leaf = 'Palatino')}
+SetEdgeStyle(juiceDataTree, fontname = 'Palatino-italic', 
+             label = GetEdgeLabel, labelfloat = TRUE,
+             fontsize = "26", fontcolor='royalblue4')
+SetNodeStyle(juiceDataTree, fontname = GetFontName, shape = GetNodeShape, 
+             fontsize = "26", fontcolor='royalblue4',
+             height="0.75", width="1")
+
+SetGraphStyle(juiceDataTree, rankdir = "LR", dpi=70.)
+
+plot(juiceDataTree, output = "graph")
+```
+
+Based on the tree plot we can say that the brand loyalty to Citrus Hill (CH) is a very important feature. Other important variables are whether the CH juice was a special edition. Furthermore, the price differences between CH and Minute Maid (MM) also seem to matter to a great extent. PriceDiff shows the difference between the actual prices of the two products (discounts included), while the ListPriceDiff variable shows the difference between the original prices of the products (discounts excluded). The more loyal a customer is to CH the more likely they are to purchase a CH product. The special edition of CH also increases the probability of purchasing CH as well as a bigger price difference from MM.
+
+### b) Investigate tree ensemble models: random forest, gradient boosting machine, XGBoost. Try various tuning parameter combinations and select the best model using cross-validation.
+
+I trained several models with different tuning parameter combinations. The best combinations for the different types of models can be seen in the three tables below.
+
+```{r, include=FALSE}
+# random forest
+# create parameter grid
+rf_params <- list(
+  ntrees = c(50, 100, 300), # number of trees grown
+  mtries = c(6, 8), # number of variables to choose at each split
+  sample_rate = c(0.2, 0.632), # sample rate for the bootstrap samples
+  max_depth = c(10, 20) # depth of the trees
+)
+
+# train model
+# rf_grid <- h2o.grid(
+#   "randomForest", x = X3, y = y,
+#   training_frame = data_train,
+#   grid_id = "rf_grid",
+#   nfolds = 5,
+#   seed = my_seed,
+#   hyper_params = rf_params
+# )
+
+# save grid to RDS
+#saveRDS(rf_grid,"/Users/JAS/Documents/Kata/Assignment 1/rf_grid.rds")
+
+# import RDS grid
+rf_grid <- readRDS("/Users/JAS/Documents/Kata/Assignment 1/rf_grid.rds")
+
+# check AUC for different parameters
+h2o.getGrid(rf_grid@grid_id, "auc")
+
+# save best rf model
+best_rf <- h2o.getModel(
+  h2o.getGrid(rf_grid@grid_id, "auc")@model_ids[[24]]
+)
+
+# get AUC for best rf model
+rf_auc <- h2o.auc(best_rf, train = TRUE, xval = TRUE)
+
+# create summary table of final parameters
+sum_table <- h2o.getGrid(rf_grid@grid_id, "auc")@summary_table
+sum_table <- sum_table %>% filter(auc == max(auc)) %>% select(c(max_depth, mtries, ntrees, sample_rate))
+```
+
+```{r}
+# print table
+knitr::kable(sum_table, caption = "Parameters of best random forest model", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+```{r, include=FALSE}
+# GBM
+# create parameter grid
+gbm_params <- list(
+  learn_rate = c(0.01, 0.05, 0.1, 0.3),
+  ntrees = c(10, 50, 100, 300),
+  max_depth = c(2, 5),
+  sample_rate = c(0.2, 0.5, 0.8, 1)
+)
+
+# train model
+# gbm_grid <- h2o.grid(
+#   "gbm", x = X3, y = y,
+#   grid_id = "gbm_grid",
+#   training_frame = data_train,
+#   nfolds = 5,
+#   seed = my_seed,
+#   hyper_params = gbm_params
+# )
+
+# save grid to RDS
+#saveRDS(gbm_grid,"/Users/JAS/Documents/Kata/Assignment 1/gbm_grid.rds")
+
+# import RDS grid
+gbm_grid <- readRDS("/Users/JAS/Documents/Kata/Assignment 1/gbm_grid.rds")
+
+# check AUC for different parameters
+#h2o.getGrid(gbm_grid@grid_id, "auc")
+
+# save best gbm model
+best_gbm <- h2o.getModel(
+  h2o.getGrid(gbm_grid@grid_id, "auc")@model_ids[[128]]
+)
+
+# get AUC for best gbm model
+gbm_auc <- h2o.auc(best_gbm, train = TRUE, xval = TRUE)
+
+# create summary table of final parameters
+sum_table <- h2o.getGrid(gbm_grid@grid_id, "auc")@summary_table
+sum_table <- sum_table %>% filter(auc == max(auc)) %>% select(c(learn_rate, max_depth, ntrees, sample_rate))
+```
+
+```{r}
+# print table
+knitr::kable(sum_table, caption = "Parameters of best GBM model", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+```{r, include=FALSE}
+# xgboost
+# create parameter grid
+xgboost_params <- list(
+  learn_rate = c(0.05, 0.1, 0.3),
+  ntrees = c(50, 100, 300),
+  max_depth = c(2, 5),
+  gamma = c(0, 1, 2),
+  sample_rate = c(0.5, 1)
+)
+
+# train model
+# xgboost_grid <- h2o.grid(
+#   "xgboost", x = X3, y = y,
+#   grid_id = "xgboost_grid",
+#   training_frame = data_train,
+#   nfolds = 5,
+#   seed = my_seed,
+#   hyper_params = xgboost_params
+# )
+
+# save grid to RDS
+#saveRDS(xgboost_grid,"/Users/JAS/Documents/Kata/Assignment 1/xgboost_grid.rds")
+
+# import RDS grid
+xgboost_grid <- readRDS("/Users/JAS/Documents/Kata/Assignment 1/xgboost_grid.rds")
+
+# check AUC for different parameters
+#h2o.getGrid(xgboost_grid@grid_id, "auc")
+
+# save best xgboost model
+best_xgboost <- h2o.getModel(
+  h2o.getGrid(xgboost_grid@grid_id, "auc")@model_ids[[108]]
+)
+
+# get AUC for best gbm model
+xgboost_auc <- h2o.auc(best_xgboost, train = TRUE, xval = TRUE)
+
+# create summary table of final parameters
+sum_table <- h2o.getGrid(xgboost_grid@grid_id, "auc")@summary_table
+sum_table <- sum_table %>% filter(auc == max(auc)) %>% select(c(gamma, learn_rate, max_depth, ntrees, sample_rate))
+```
+
+```{r}
+# print table
+knitr::kable(sum_table, caption = "Parameters of best XGBoost model", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### c) Compare the performance of the different models. Make sure to set the same seed before model training for all 3 models so that your cross validation samples are the same. Is any of these giving significantly different predictive power than the others?
+
+Based on the table below we can say that the differences between the performances of the models are relatively small. The biggest differences are between the simple decision tree model and the GBM and XGBoost models. Based on the cross-validated RMSE and AUC the XGBoost performs the best, however it only beats the GBM model by 0.001 and 0 respectively.
+
+```{r}
+# save models to a list
+my_models <- list(
+  base_tree, best_rf, best_gbm, best_xgboost
+)
+
+# create table with AUC values for different models
+auc_on_test <- map_df(my_models, ~{
+  tibble(model = .@model_id, RMSE = h2o.rmse(., xval = TRUE), AUC_xval = h2o.auc(., xval = TRUE), AUC_test = h2o.auc(h2o.performance(., data_test)))
+}) %>% arrange(AUC_xval)
+
+names(auc_on_test) <- c("Model", "Cross-validated RMSE","Cross-validated AUC", "Test AUC")
+
+# print table
+knitr::kable( auc_on_test, caption = "Performance comparison of tree based models", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### d) Choose the best model and plot ROC curve for the best model on the test set. Calculate and interpret AUC.
+
+Since the XGBoost model had the best performance - even if only by a little - I decided to plot the ROC curve for this model. It can be seen below.
+
+```{r}
+# plot ROC curve
+# function to get performance metrics for the plot
+getPerformanceMetrics <- function(model, newdata = NULL, xval = FALSE) {
+  h2o.performance(model, newdata = newdata, xval = xval)@metrics$thresholds_and_metric_scores %>%
+    as_tibble() %>%
+    mutate(model = model@model_id)
+}
+
+# calculate performance metrics
+xgboost_performance <- getPerformanceMetrics(best_xgboost, xval = TRUE)
+
+# create plot
+ggplot(xgboost_performance, aes(fpr, tpr)) +
+    geom_path(color = "darkblue") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    coord_fixed() +
+    labs(x = "False Positive Rate", y = "True Positive Rate", title = "ROC curve for XGBoost model")
+```
+
+The AUC on the test set for the XGBoost model is 0.902 which is higher than the cross-validated one. This means that the predictive power of the model is relatively high, since the area under its ROC curve is large. This can also be seen in the plot above.
+
+```{r, include=FALSE}
+# calculate AUC
+h2o.auc(h2o.performance(best_xgboost, newdata = data_test))
+```
+
+### e) Inspect variable importance plots for the 3 models. Are similar variables found to be the most important for the 3 models?
+
+If we look at the variable importance plots of the different models below we can see that the most important variables overlap to a great extent. There are only four variables that do not appear in all of the three plots: `PriceCH`, `PctDiscCH`, `PctDicsMM` and `DiscCH`. `LoyalCH` is the most important variable by far in all three cases and the top 3 is the same for the random forest and the GBM models. As for the XGBoost model two of the top 3 match with the top 3 of the other two models.
+
+```{r, out.width="50%"}
+h2o.varimp_plot(best_rf)
+h2o.varimp_plot(best_gbm)
+```
+
+```{r, out.width="50%"}
+h2o.varimp_plot(best_xgboost)
+```
+
+## 2. Variable importance profiles
+
+### a) Train two random forest models: one with sampling 2 variables randomly for each split and one with 10 (use the whole dataset and don’t do cross-validation). Inspect variable importance profiles. What do you see in terms of how important the first few variables are relative to each other?
+
+```{r, include=FALSE}
+# import data
+data <- as_tibble(ISLR::Hitters) %>%
+  drop_na(Salary) %>%
+  mutate(log_salary = log(Salary), Salary = NULL)
+
+# save as h2o data
+h2o_data <- as.h2o(data)
+
+# create predictor sets
+y <- "log_salary"
+X <- setdiff(names(h2o_data), y)
+```
+
+```{r,include=FALSE}
+# train model with mtries = 2
+rf_2 <- h2o.randomForest(
+  X, y,
+  training_frame = h2o_data,
+  model_id = "rf_2",
+  seed = my_seed,
+  mtries = 2
+)
+
+# check MAE
+h2o.mae(h2o.performance(rf_2))
+
+# train model with mtries = 10
+rf_10 <- h2o.randomForest(
+  X, y,
+  training_frame = h2o_data,
+  model_id = "rf_10",
+  seed = my_seed,
+  mtries = 10
+)
+
+# check MAE
+h2o.mae(h2o.performance(rf_10))
+```
+
+If we look at the two plots below we can see that the decrease in importance is much more gradual in case of the random forest model with the `mtries` parameter set to 2 (left plot) than in case of the model with `mtries` equals 10 (right plot). In the right plot there is a large drop after the second variable and these big drops remain until the fifth variable.
+
+```{r, out.width="50%"}
+# variable importance plots
+h2o.varimp_plot(rf_2)
+h2o.varimp_plot(rf_10)
+```
+
+### b) One of them is more extreme in terms of how the most important and the next ones relate to each other. Give an intuitive explanation how `mtry`/`mtries` relates to relative importance of variables in random forest models.
+
+If the `mtries` parameter is set to a higher number then it means that the number of randomly chosen variables at each split is higher. Consequently, variables that are more influential - meaning their use at a split results in a larger improvement in performance - are selected more often than when the `mtries` parameter is set to a lower number. Because of this when we plot the relative importance of variables we will see that the chart is less smooth just like in the example above.
+
+### c) In the same vein, estimate two gbm models with varying rate of sampling for each tree (use 0.1 and 1 for the parameter bag.fraction/sample_rate). Hold all the other parameters fixed: grow 500 trees with maximum depths of 5, applying a learning rate of 0.1. Compare variable importance plots for the two models. Could you explain why is one variable importance profile more extreme than the other?
+
+```{r, include=FALSE}
+# train model with sample_rate = 0.1
+gbm_0.1 <- h2o.gbm(
+  x = X, y = y,
+  model_id = "gbm_0.1",
+  training_frame = h2o_data,
+  seed = my_seed,
+  ntrees = 500,
+  max_depth = 5,
+  learn_rate = 0.1,
+  sample_rate = 0.1
+)
+
+# check MAE
+h2o.mae(h2o.performance(gbm_0.1))
+
+# train model with sample_rate = 1
+gbm_1 <- h2o.gbm(
+  x = X, y = y,
+  model_id = "gbm_1",
+  training_frame = h2o_data,
+  seed = my_seed,
+  ntrees = 500,
+  max_depth = 5,
+  learn_rate = 0.1,
+  sample_rate = 1
+)
+
+# check MAE
+h2o.mae(h2o.performance(gbm_1))
+```
+
+```{r, out.width="50%"}
+# variable importance plots
+h2o.varimp_plot(gbm_0.1)
+h2o.varimp_plot(gbm_1)
+```
+
+If the `sample_rate` parameter is set to a higher number then the number of observations on which each tree is trained is higher. The more observations are used to train the model the more accurate its predictions become. This also means that the relative importance of variables becomes clearer and that we can see the differences between them more. The plots above support this since the one on the right is more extreme and that belongs to the model where the `sample_rate` was set to 1.
+
+## Task 3
+
+### a) Create train / validation / test sets, cutting the data into 5% - 45% - 50% parts.
+
+```{r, include=FALSE}
+# import data
+data <- read_csv("/Users/JAS/Documents/Kata/Assignment 1/KaggleV2-May-2016.csv")
+
+# some data cleaning
+data <- select(data, -one_of(c("PatientId", "AppointmentID", "Neighbourhood"))) %>%
+  janitor::clean_names()
+
+# for binary prediction, the target variable must be a factor + generate new variables
+data <- mutate(
+  data,
+  no_show = factor(no_show, levels = c("Yes", "No")),
+  handcap = ifelse(handcap > 0, 1, 0),
+  across(c(gender, scholarship, hipertension, diabetes, alcoholism, handcap), factor),
+  hours_since_scheduled = as.numeric(appointment_day - scheduled_day)
+)
+
+# clean up a little bit
+data <- filter(data, between(age, 0, 95), hours_since_scheduled >= 0) %>%
+  select(-one_of(c("scheduled_day", "appointment_day", "sms_received")))
+```
+
+```{r, include=FALSE}
+# split data
+splitted_data <- h2o.splitFrame(as.h2o(data), ratios = c(0.05, 0.45), seed = my_seed)
+data_train <- splitted_data[[1]]
+data_valid <- splitted_data[[2]]
+data_test <- splitted_data[[3]]
+
+# create predictor sets
+y <- 'no_show'
+X <- setdiff(names(data_train), y)
+```
+
+After cutting the data the train set had 3597, the validation set had 32370 and the test set had 35967 observations.
+
+### b) Train a benchmark model of your choice (such as random forest, gbm or glm) and evaluate it on the validation set.
+
+I trained a random forest model using cross-validation as a benchmark model. I set the `ntrees` parameter to 300 and the `max_depth` parameter to 10. The performance of the model can be seen in the table below.
+
+```{r, include=FALSE}
+# train a random forest model as a benchmark model
+base_rf <- h2o.randomForest(
+  X, y,
+  training_frame = data_train,
+  model_id = "base_rf",
+  seed = my_seed,
+  nfolds = 5,
+  ntrees = 300,
+  max_depth = 10
+)
+```
+
+```{r}
+# calculate performance and save to df
+names <- c('RMSE', 'AUC')
+perf <- c(h2o.rmse(h2o.performance(base_rf, data_valid)), h2o.auc(h2o.performance(base_rf, data_valid)))
+
+base_rf_perf <- as.data.frame(cbind(names, perf))
+
+names(base_rf_perf) <- c('Measure', 'Value')
+row.names(base_rf_perf) <- NULL
+
+# print table
+knitr::kable( base_rf_perf , caption = "Performance of benchmark random forest model on validation set", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+Based on the performance measures there is room for improvement.
+
+### c) Build at least 3 models of different families using cross validation, keeping cross validated predictions. You might also try `deeplearning`.
+
+I built four models in total: a GLM, a random forest, a GBM and a deep learning model.
+
+```{r, include=FALSE}
+# train GLM
+glm_stack <- h2o.glm(
+  X, y,
+  training_frame = data_train,
+  model_id = "lasso_stack",
+  family = "binomial",
+  alpha = 1,
+  lambda_search = TRUE,
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE
+)
+
+# train random forest
+rf_stack <- h2o.randomForest(
+  X, y,
+  training_frame = data_train,
+  model_id = "rf_stack",
+  ntrees = 200,
+  max_depth = 10,
+  mtries = 2,
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE
+)
+
+# train GBM
+gbm_stack <- h2o.gbm(
+  X, y,
+  training_frame = data_train,
+  model_id = "gbm_stack",
+  ntrees = 50,
+  max_depth = 2,
+  learn_rate = 0.05,
+  seed = my_seed,
+  nfolds = 5,
+  sample_rate = 0.5,
+  keep_cross_validation_predictions = TRUE
+)
+
+# train deep learning
+deeplearning_stack <- h2o.deeplearning(
+  X, y,
+  training_frame = data_train,
+  model_id = "deeplearning_stack",
+  standardize = TRUE,
+  hidden = c(50, 20),
+  seed = my_seed,
+  nfolds = 5,
+  keep_cross_validation_predictions = TRUE
+)
+```
+
+### d) Evaluate validation set performance of each model.
+
+The performances of the four models can be seen in the table below. Based on both RMSE and AUC the best performing one is the GBM model. In general the performances of the 4 models are not significantly better than that of the benchmark random forest model.
+
+```{r}
+# save models to a list
+base_learners <- list(
+  glm_stack, rf_stack, gbm_stack, deeplearning_stack
+)
+
+# create table with AUC values for different models
+base_perf <- map_df(base_learners, ~{
+  tibble(model = .@model_id, RMSE = h2o.rmse(h2o.performance(., data_valid)), AUC = h2o.auc(h2o.performance(., data_valid)))
+}) %>% arrange(desc(RMSE))
+
+names(base_perf) <- c("Model", "Validation RMSE","Validation AUC")
+
+# print table
+knitr::kable( base_perf, caption = "Performance comparison of base models on validation set", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### e) How large are the correlations of predicted scores of the validation set produced by the base learners?
+
+Based on the plot below the correlation is the largest between the scores predicted by the GBM and the lasso models as well as between the deep learning and lasso models. In general the correlation is moderate between the scores predicted by the different models.
+
+```{r}
+h2o.model_correlation_heatmap(base_learners, data_valid)
+```
+
+### f) Create a stacked ensemble model from the base learners.
+
+I created a stacked ensemble model from the base learners with glm being the meta learner.
+
+```{r, include = FALSE}
+# stacked ensemble model with glm as the meta learner
+ensemble_model <- h2o.stackedEnsemble(
+  X, y,
+  training_frame = data_train,
+  base_models = base_learners,
+)
+```
+
+### g) Evaluate ensembles on validation set. Did it improve prediction?
+
+The table below shows the performance measures for the ensemble model. Based on the values the prediction did not really improve. The values are almost the same as for the GBM model which was part of the base learners.
+
+```{r}
+# calculate performance and save to df
+names <- c('RMSE', 'AUC')
+perf <- c(h2o.rmse(h2o.performance(ensemble_model, data_valid)), h2o.auc(h2o.performance(ensemble_model, data_valid)))
+
+ensemble_perf <- as.data.frame(cbind(names, perf))
+
+names(ensemble_perf) <- c('Measure', 'Value')
+row.names(ensemble_perf) <- NULL
+
+# print table
+knitr::kable( ensemble_perf , caption = "Performance of ensemble model on validation set", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### h) Evaluate the best performing model on the test set. How does performance compare to that of the validation set?
+
+Since the GBM and the ensemble model performed almost equally I decided to estimate the GBM model on the test set because that model is simpler. The table below shows its performance both on the validation and the test sets. The performance on the test set is a little lower than on the validation set, however the difference between the two is not very large.
+
+```{r}
+# calculate performance metrics for validation and test set
+rmses <- c(h2o.rmse(h2o.performance(ensemble_model, data_valid)), h2o.rmse(h2o.performance(ensemble_model, data_test)))
+
+aucs <- c(h2o.auc(h2o.performance(ensemble_model, data_valid)), h2o.auc(h2o.performance(ensemble_model, data_test)))
+
+# combine them to a table
+valid_vs_test <- as.data.frame(cbind(rmses, aucs))
+
+names(valid_vs_test) <- c("RMSE", "AUC")
+row.names(valid_vs_test) <- c("Validation", "Test")
+
+# print table
+knitr::kable( valid_vs_test , caption = "Performance of best performing model", digits = 3 ) %>% kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+

@@ -1,0 +1,1266 @@
+---
+title: "Neural Networks"
+subtitle: "Homework 2 - Data Science 2 Course"
+author: "Kata Süle"
+date: '5th April 2021'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r, include=FALSE}
+# import packages
+library(keras)
+library(ggplot2)
+library(kableExtra)
+library(knitr)
+library(grid)
+library(magick)
+library(filesstrings)
+
+# set path
+path <- 'C:/CEU/Winter_Term/Data_Science_2/Homework 2/'
+```
+
+
+# 1. Fashion MNIST data
+
+### a. Show some example images from the data.
+
+The train dataset contains 60,000, while the test contains 10,000 grayscale images of fashion items. The items belong to 10 classes which are indicated by numbers ranging from 0 to 9. The data is stored in three dimensional arrays. Below are the first 6 fashion items extracted from the train dataset. The numbers below the pictures indicate the classes they belong to.
+
+```{r, include=FALSE, cache=TRUE}
+# import data
+fashion_mnist <- dataset_fashion_mnist()
+x_train <- fashion_mnist$train$x
+y_train <- fashion_mnist$train$y
+x_test <- fashion_mnist$test$x
+y_test <- fashion_mnist$test$y
+```
+
+```{r}
+# split the canvas into rows and columns
+par(mfrow = c(2, 3))
+
+# plot the first 6 images
+for (i in 1:6){
+  image(
+    x_train[i,,],
+    col = gray.colors(255), xlab = y_train[i], ylab = ""
+  )
+}
+```
+
+### b. Train a fully connected deep network to predict items.
+
+In order to be able to train a fully connected neural network the data had to be restructured. First, I split the original training set into training and validation sets with 10,000 and 50,000 observations respectively. After this step I rescaled the data by dividing it by 255 because for grayscale images the value of pixels is between 0 and 255. Furthermore, I also converted it to two dimensional matrices so that the models can be trained on it later. As for the labels I created one-hot encoding for them.
+
+```{r, include=FALSE, cache=TRUE}
+### RESTRUCTURE DATA
+# split train data into train and validation sets
+# get indeces
+set.seed(1234)
+train_indices <- sample(seq(nrow(x_train)), 10000) # keep 10000 observations in the training set
+
+# split x into train and validation
+data_train_x <- x_train[train_indices,, ]
+data_valid_x <- x_train[-train_indices,, ]
+
+# split y into train and validation
+data_train_y <- y_train[train_indices]
+data_valid_y <- y_train[-train_indices]
+
+# rescale x for all sets
+data_train_x <- as.matrix(as.data.frame.array(data_train_x)) / 255
+data_valid_x <- as.matrix(as.data.frame.array(data_valid_x)) / 255
+data_test_x <- as.matrix(as.data.frame.array(x_test)) / 255
+
+# one-hot encoding for y for all sets
+data_train_y <- to_categorical(data_train_y, 10)
+data_valid_y <- to_categorical(data_valid_y, 10)
+data_test_y <- to_categorical(y_test, 10)
+```
+
+In total I trained a baseline model based on the script that we used in class and four additional models with different settings. There were always 784 input nodes because of the size of the images (28x28 pixels) and 10 output nodes because there were 10 classes (0-9). The further settings of the models were the following:
+
+1. Baseline model:
+
+  * 1 hidden layer with 128 nodes
+  * dropout rate of 0.3
+  * relu and softmax activation functions.
+  
+2. Model 1:
+
+  * 1 hidden layer with 28 nodes
+  * relu and softmax activation functions.
+  
+3. Model 2:
+
+  * 2 hidden layers with 28 and 28 nodes
+  * relu, sigmoid and softmax activation functions.
+  
+4. Model 3:
+
+  * 3 hidden layers with 100 nodes in each
+  * dropout rate of 0.3
+  * relu, sigmoid, tanh and softmax activation functions.
+  
+5. Model 4:
+
+  * 2 hidden layers with 100 nodes each
+  * dropout rate of 0.7
+  * sigmoid, tanh and softmax activation functions.
+
+```{r, include=FALSE}
+##### TRAIN MODELS
+### BASELINE MODEL
+# create model object
+model_base <- keras_model_sequential()
+
+# add layers to the model
+model_base %>%
+  layer_dense(units = 128, activation = 'relu', input_shape = c(784)) %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 10, activation = 'softmax')
+
+# check model summary
+summary(model_base)
+
+# set loss function and the metrics we want to see
+compile(
+  model_base,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# baseRDS_NN <- fit(
+#   model_base, data_train_x, data_train_y,
+#   epochs = 30, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(baseRDS_NN, paste0(path, "data/baseRDS_NN.rds"))
+baseRDS_NN <- readRDS(paste0(path, "data/baseRDS_NN.rds") )
+
+# save model
+# save_model_hdf5(model_base, paste0(path, "data/model_base.h5"))
+
+# import model
+model_base <- load_model_hdf5(paste0(path, "data/model_base.h5"))
+
+# evaluate model
+model_base_eval <- as.data.frame(evaluate(model_base, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### FIRST MODEL
+# create model object
+model1 <- keras_model_sequential()
+
+# add layers to the model
+model1 %>%
+  layer_dense(units = 28, activation = 'relu', input_shape = c(784)) %>% 
+  layer_dense(units = 10, activation = 'softmax')
+
+# check model summary
+summary(model1)
+
+# set loss function and the metrics we want to see
+compile(
+  model1,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model1RDS_NN <- fit(
+#   model1, data_train_x, data_train_y,
+#   epochs = 30, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model1RDS_NN, paste0(path, "data/model1RDS_NN.rds") )
+model1RDS_NN <- readRDS(paste0(path, "data/model1RDS_NN.rds"))
+
+# save model
+# save_model_hdf5(model1, paste0(path, "data/model1.h5"))
+
+# import model
+model1 <- load_model_hdf5(paste0(path, "data/model1.h5"))
+
+# evaluate model
+model1_eval <- as.data.frame(evaluate(model1, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### SECOND MODEL
+# create model object
+model2 <- keras_model_sequential()
+
+# add layers to the model
+model2 %>%
+  layer_dense(units = 28, activation = 'relu', input_shape = c(784)) %>%
+  layer_dense(units = 28, activation = 'sigmoid') %>%
+  layer_dense(units = 10, activation = 'softmax')
+
+# check model summary
+summary(model2)
+
+# set loss function and the metrics we want to see
+compile(
+  model2,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model2RDS_NN <- fit(
+#   model2, data_train_x, data_train_y,
+#   epochs = 30, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model2RDS_NN, paste0(path, "data/model2RDS_NN.rds") )
+model2RDS_NN <- readRDS(paste0(path, "data/model2RDS_NN.rds"))
+
+# save model
+# save_model_hdf5(model2, paste0(path, "data/model2.h5"))
+
+# import model
+model2 <- load_model_hdf5(paste0(path, "data/model2.h5"))
+
+# evaluate model
+model2_eval <- as.data.frame(evaluate(model2, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### THIRD MODEL
+# create model object
+model3 <- keras_model_sequential()
+
+# add layers to the model
+model3 %>%
+  layer_dense(units = 100, activation = 'relu', input_shape = c(784)) %>%
+  layer_dense(units = 100, activation = 'sigmoid') %>%
+  layer_dense(units = 100, activation = 'tanh') %>%
+  layer_dropout(rate = 0.3) %>% 
+  layer_dense(units = 10, activation = 'softmax')
+
+# check model summary
+summary(model3)
+
+# set loss function and the metrics we want to see
+compile(
+  model3,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model3RDS_NN <- fit(
+#   model3, data_train_x, data_train_y,
+#   epochs = 30, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model3RDS_NN, paste0(path, "data/model3RDS_NN.rds"))
+model3RDS_NN <- readRDS(paste0(path, "data/model3RDS_NN.rds"))
+
+# save model
+# save_model_hdf5(model3, paste0(path, "data/model3.h5"))
+
+# import model
+model3 <- load_model_hdf5(paste0(path, "data/model3.h5"))
+
+# evaluate model
+model3_eval <- as.data.frame(evaluate(model3, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### FOURTH MODEL
+# create model object
+model4 <- keras_model_sequential()
+
+# add layers to the model
+model4 %>%
+  layer_dense(units = 100, activation = 'sigmoid', input_shape = c(784)) %>%
+  layer_dense(units = 100, activation = 'tanh') %>%
+  layer_dropout(rate = 0.7) %>% 
+  layer_dense(units = 10, activation = 'softmax')
+
+# check model summary
+summary(model4)
+
+# set loss function and the metrics we want to see
+compile(
+  model4,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model4RDS_NN <- fit(
+#   model4, data_train_x, data_train_y,
+#   epochs = 30, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model4RDS_NN, paste0(path, "data/model4RDS_NN.rds"))
+model4RDS_NN <- readRDS(paste0(path, "data/model4RDS_NN.rds"))
+
+# save model
+# save_model_hdf5(model4, paste0(path, "data/model4.h5"))
+
+# import model
+model4 <- load_model_hdf5(paste0(path, "data/model4.h5"))
+
+# evaluate model
+model4_eval <- as.data.frame(evaluate(model4, data_valid_x, data_valid_y))
+```
+
+The table below shows the accuracy and loss measures for all the models calculated for the validation set. We can see that the baseline model proved to have the best performance. Increasing the number of hidden layers usually resulted in better performance so did setting a dropout rate. Furthermore, including more nodes in the hidden layers seemed to matter as well. As for the activation functions I did not observe a large difference between the different settings.
+
+```{r}
+# model comparison
+# bind the data frames
+model_comparison <- cbind(model_base_eval, model1_eval, model2_eval, model3_eval, model4_eval)
+
+# rename columns
+colnames(model_comparison) <- c('Baseline', 'Model 1', 'Model 2', 'Model 3', 'Model 4')
+
+# create table
+knitr::kable(model_comparison, caption = 'Model comparison of fully connected neural networks', digits = 2) %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+The plot below shows the training history of the baseline model which I chose to be the final model. We can see how the performance stabilizes over the epochs.
+
+```{r}
+# plot final model
+plot(baseRDS_NN) +
+  ggtitle('Training history of final model') +
+  theme_bw() +
+  xlab('Epoch') +
+  ylab('')
+```
+
+### c. Evaluate the model on the test set. How does test error compare to validation error?
+
+The table below shows the performance of the final model (baseline model) on the training, validation and test sets. We can see that the test error is not very different from the validation error, therefore the model has a relatively stable performance.
+
+```{r}
+# calculate test set performance of baseline model
+model_base_eval_test <- as.data.frame(evaluate(model_base, data_test_x, data_test_y))
+model_base_eval_train <- as.data.frame(evaluate(model_base, data_train_x, data_train_y))
+
+# bind performances on different sets
+final_model_comparison <- cbind(model_base_eval_train, model_base_eval, model_base_eval_test)
+
+# rename rows
+colnames(final_model_comparison) <- c('Training set', 'Validation set', 'Test set')
+
+# create table
+knitr::kable(final_model_comparison, caption = 'Performance of final model on different sets', digits = 2) %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### d. Try building a convolutional neural network and see if you can improve test set performance.
+
+In this part I trained a baseline model based on the script that we used in class and five additional models. The input shape (28, 28, 1) and the number of output nodes (10) were the same across the models. The differences between the models were the following: kernel size, pool size, activation functions, number of nodes in the hidden layers, dropout rate and number of convolutional layers. Based on the table below we can say that again the baseline model had the best performance on the validation set. In general larger kernel size (5x5 instead of 3x3) decreased performance so did adding too many convolutional layers. On the other hand adding more hidden layers after the convolutional ones helped to increase performance.
+
+```{r, include=FALSE}
+# reshape data to be able to train models
+data_train_x <- array_reshape(data_train_x, c(nrow(data_train_x), 28, 28, 1))
+data_valid_x <- array_reshape(data_valid_x, c(nrow(data_valid_x), 28, 28, 1))
+data_test_x <- array_reshape(data_test_x, c(nrow(data_test_x), 28, 28, 1))
+```
+
+```{r, include=FALSE}
+### TRAIN MODELS
+### BASELINE MODEL
+
+# create model object
+cnn_model_base <- keras_model_sequential()
+
+# add layers
+cnn_model_base %>%
+  layer_conv_2d(
+    filters = 32,
+    kernel_size = c(3, 3),
+    activation = 'relu',
+    input_shape = c(28, 28, 1)
+  ) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_dropout(rate = 0.25) %>%
+  layer_flatten() %>% # increases complexity
+  layer_dense(units = 16, activation = 'relu') %>% 
+  layer_dense(units = 10, activation = 'softmax') 
+
+# compile model
+compile(
+  cnn_model_base,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# baseRDS_CNN <- fit(
+#   cnn_model_base, data_train_x, data_train_y,
+#   epochs = 15, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(baseRDS_CNN, paste0(path, "data/baseRDS_CNN.rds"))
+baseRDS_CNN <- readRDS(paste0(path, "data/baseRDS_CNN.rds"))
+
+# save model
+# save_model_hdf5(cnn_model_base, paste0(path, "data/cnn_model_base.h5"))
+
+# import model
+cnn_model_base <- load_model_hdf5(paste0(path, "data/cnn_model_base.h5"))
+
+# evaluate model
+model_base_cnn_eval <- as.data.frame(evaluate(cnn_model_base, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### CNN Model 1
+
+# create model object
+cnn_model1 <- keras_model_sequential()
+
+# add layers
+cnn_model1 %>%
+  layer_conv_2d(
+    filters = 10,
+    kernel_size = c(5, 5), 
+    activation = 'relu',
+    input_shape = c(28, 28, 1)
+  ) %>%
+  layer_max_pooling_2d(pool_size = c(3, 3)) %>% 
+  layer_dropout(rate = 0.25) %>%
+  layer_flatten() %>% 
+  layer_dense(units = 10, activation = 'relu') %>% 
+  layer_dense(units = 10, activation = 'softmax') 
+
+# compile model
+compile(
+  cnn_model1,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model1RDS_CNN <- fit(
+#   cnn_model1, data_train_x, data_train_y,
+#   epochs = 15, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model1RDS_CNN, paste0(path, "data/model1RDS_CNN.rds"))
+model1RDS_CNN <- readRDS(paste0(path, "data/model1RDS_CNN.rds"))
+
+# save model
+# save_model_hdf5(cnn_model1, paste0(path, "data/cnn_model1.h5"))
+
+# import model
+cnn_model1 <- load_model_hdf5(paste0(path, "data/cnn_model1.h5"))
+
+# evaluate model
+model1_cnn_eval <- as.data.frame(evaluate(cnn_model1, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### CNN Model 2
+
+# create model object
+cnn_model2 <- keras_model_sequential()
+
+# add layers
+cnn_model2 %>%
+  layer_conv_2d(
+    filters = 10, 
+    kernel_size = c(5, 5), 
+    activation = 'relu',
+    input_shape = c(28, 28, 1)
+  ) %>%
+  layer_max_pooling_2d(pool_size = c(3, 3)) %>% 
+  layer_conv_2d(
+    filters = 20, 
+    kernel_size = c(5, 5),
+    activation = 'relu',
+    input_shape = c(28, 28, 1)
+  ) %>%
+  layer_max_pooling_2d(pool_size = c(3, 3)) %>% 
+  layer_dropout(rate = 0.25) %>%
+  layer_flatten() %>% 
+  layer_dense(units = 10, activation = 'relu') %>% 
+  layer_dense(units = 10, activation = 'softmax') 
+
+# compile model
+compile(
+  cnn_model2,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model2RDS_CNN <- fit(
+#   cnn_model2, data_train_x, data_train_y,
+#   epochs = 15, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model2RDS_CNN, paste0(path, "data/model2RDS_CNN.rds"))
+model2RDS_CNN <- readRDS(paste0(path, "data/model2RDS_CNN.rds"))
+
+# save model
+# save_model_hdf5(cnn_model2, paste0(path, "data/cnn_model2.h5"))
+
+# import model
+cnn_model2 <- load_model_hdf5(paste0(path, "data/cnn_model2.h5"))
+
+# evaluate model
+model2_cnn_eval <- as.data.frame(evaluate(cnn_model2, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### CNN Model 3
+
+# create model object
+cnn_model3 <- keras_model_sequential()
+
+# add layers
+cnn_model3 %>% 
+  layer_conv_2d(filters = 32, kernel_size = c(3,3), activation = "relu", 
+                input_shape = c(28,28,1)) %>% 
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  layer_conv_2d(filters = 64, kernel_size = c(3,3), activation = "relu") %>% 
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  layer_conv_2d(filters = 64, kernel_size = c(3,3), activation = "relu") %>% 
+  layer_dropout(rate = 0.25) %>%
+  layer_flatten() %>% 
+  layer_dense(units = 10, activation = 'relu') %>%
+  layer_dense(units = 10, activation = 'softmax') 
+
+# compile model
+compile(
+  cnn_model3,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model3RDS_CNN <- fit(
+#   cnn_model3, data_train_x, data_train_y,
+#   epochs = 15, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model3RDS_CNN, paste0(path, "data/model3RDS_CNN.rds"))
+model3RDS_CNN <- readRDS(paste0(path, "data/model3RDS_CNN.rds"))
+
+# save model
+# save_model_hdf5(cnn_model3, paste0(path, "data/cnn_model3.h5"))
+
+# import model
+cnn_model3 <- load_model_hdf5(paste0(path, "data/cnn_model3.h5"))
+
+# evaluate model
+model3_cnn_eval <- as.data.frame(evaluate(cnn_model3, data_valid_x, data_valid_y))
+```
+
+```{r, include=FALSE}
+### CNN Model 4
+
+# create model object
+cnn_model4 <- keras_model_sequential()
+
+# add layers
+cnn_model4 %>% 
+  layer_conv_2d(filters = 32, kernel_size = c(3,3), activation = "sigmoid", 
+                input_shape = c(28,28,1)) %>% 
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  layer_dropout(rate = 0.25) %>%
+  layer_flatten() %>% 
+  layer_dense(units = 10, activation = 'softmax')
+
+# compile model
+compile(
+  cnn_model4,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model4RDS_CNN <- fit(
+#   cnn_model4, data_train_x, data_train_y,
+#   epochs = 15, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model4RDS_CNN, paste0(path, "data/model4RDS_CNN.rds"))
+model4RDS_CNN <- readRDS(paste0(path, "data/model4RDS_CNN.rds"))
+
+# save model
+# save_model_hdf5(cnn_model4, paste0(path, "data/cnn_model4.h5"))
+
+# import model
+cnn_model4 <- load_model_hdf5(paste0(path, "data/cnn_model4.h5"))
+
+# evaluate model
+model4_cnn_eval <- as.data.frame(evaluate(cnn_model4, data_valid_x, data_valid_y))
+
+```
+
+```{r, include=FALSE}
+### CNN Model 5
+
+# create model object
+cnn_model5 <- keras_model_sequential()
+
+# add layers
+cnn_model5 %>% 
+  layer_conv_2d(filters = 32, kernel_size = c(3,3), activation = "relu", 
+                input_shape = c(28,28,1)) %>% 
+  layer_max_pooling_2d(pool_size = c(2,2)) %>% 
+  layer_dropout(rate = 0.25) %>%
+  layer_flatten() %>% # increases complexity
+  layer_dense(units = 32, activation = 'relu') %>%  
+  layer_dense(units = 32, activation = 'sigmoid') %>%  
+  layer_dense(units = 10, activation = 'softmax') 
+
+# compile model
+compile(
+  cnn_model5,
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('accuracy')
+)
+
+# fit model
+# model5RDS_CNN <- fit(
+#   cnn_model5, data_train_x, data_train_y,
+#   epochs = 15, batch_size = 128,
+#   validation_data = list(data_valid_x, data_valid_y)
+# )
+
+# save fit
+# saveRDS(model5RDS_CNN, paste0(path, "data/model5RDS_CNN.rds"))
+model5RDS_CNN <- readRDS(paste0(path, "data/model5RDS_CNN.rds"))
+
+# save model
+# save_model_hdf5(cnn_model5, paste0(path, "data/cnn_model5.h5"))
+
+# import model
+cnn_model5 <- load_model_hdf5(paste0(path, "data/cnn_model5.h5"))
+
+# evaluate model
+model5_cnn_eval <- as.data.frame(evaluate(cnn_model5, data_valid_x, data_valid_y))
+```
+
+```{r}
+# model comparison
+# bind model performances
+model_comparison_cnn <- cbind(model_base_cnn_eval, model1_cnn_eval, model2_cnn_eval, model3_cnn_eval, model4_cnn_eval, model5_cnn_eval)
+
+# rename rows
+colnames(model_comparison_cnn) <- c('Baseline', 'Model 1', 'Model 2', 'Model 3', 'Model 4', 'Model 5')
+
+# create table
+knitr::kable(model_comparison_cnn, caption = 'Model comparison for convolutional networks', digits = 2) %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+The plot below shows the training history of the best model (baseline model). We can see the signs of overfitting between the 12 and 15 epoch.
+
+```{r}
+# plot best model
+plot(baseRDS_CNN) +
+  ggtitle('Training history of final convolutional model') +
+  theme_bw() +
+  xlab('Epoch') +
+  ylab('')
+```
+
+# 2. Hot dog or not hot dog?
+
+### a. Pre-process data so that it is acceptable by Keras (set folder structure, bring images to the same size, etc).
+
+First I created a validation set by randomly selecting 150-150 photos from the hot_dog and not_hot_dog folders of the training data. Then I rescaled the images, set the folders for the train, validation and test generator functions and set the image and batch sizes as well.
+
+```{r, include=FALSE}
+# create validation set
+
+# randomly sample 150 photos from the hot dog and from the not hot dog training set folders
+# set.seed(1234)
+# validation_indeces_yes <- sample(list.files(paste0(path, "data/hot-dog-not-hot-dog/train/hot_dog")), size = 150, replace = F)
+# validation_indeces_no <- sample(list.files(paste0(path, "data/hot-dog-not-hot-dog/train/not_hot_dog")), size = 150, replace = F)
+
+# create new folders for the validation set
+# dir.create(paste0(path,"data/hot-dog-not-hot-dog/validation"))
+# dir.create(paste0(path,"data/hot-dog-not-hot-dog/validation/hot_dog"))
+# dir.create(paste0(path,"data/hot-dog-not-hot-dog/validation/not_hot_dog"))
+
+# move hot dog photos from train to validation if they are in the sample
+# for (file in list.files(paste0(path, "data/hot-dog-not-hot-dog/train/hot_dog"))) {
+#   if (file %in% validation_indeces_yes){
+#     file.move(paste0(path, "data/hot-dog-not-hot-dog/train/hot_dog/", file), paste0(path,"data/hot-dog-not-hot-dog/validation/hot_dog/"))
+#   }
+# }
+
+# move not hot dog photos from train to validation if they are in the sample
+# for (file in list.files(paste0(path, "data/hot-dog-not-hot-dog/train/not_hot_dog"))) {
+#   if (file %in% validation_indeces_no){
+#     file.move(paste0(path, "data/hot-dog-not-hot-dog/train/not_hot_dog/", file), paste0(path,"data/hot-dog-not-hot-dog/validation/not_hot_dog/"))
+#   }
+# }
+```
+
+```{r, include=FALSE}
+# rescale images
+train_datagen <- image_data_generator(rescale = 1/255)  
+validation_datagen <- image_data_generator(rescale = 1/255)  
+test_datagen <- image_data_generator(rescale = 1/255) 
+```
+
+```{r, include=FALSE}
+# set image and batch size
+image_size <- c(150, 150)
+batch_size <- 50
+
+# set train generator
+train_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/train"), 
+  train_datagen,              
+  target_size = image_size,  
+  batch_size = batch_size,
+  class_mode = "binary"      
+)
+
+# set validation generator
+validation_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/validation"),   
+  validation_datagen,
+  target_size = image_size,
+  batch_size = batch_size,
+  class_mode = "binary"
+)
+
+# set test generator
+test_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/test"), 
+  test_datagen,
+  target_size = image_size,
+  batch_size = batch_size,
+  class_mode = "binary"
+)
+```
+
+### b. Estimate a convolutional neural network to predict if an image contains a hot dog or not. Evaluate your model on the test set.
+
+I estimated a baseline model which had two convolutional layers, one hidden layer and a dropout rate of 0.5. The plot below shows the training history of this model. The plot shows sign of overfitting because the training accuracy keeps increasing when the validation accuracy starts to decrease.
+
+```{r, include=FALSE}
+### TRAIN MODELS
+### BASELINE MODEL
+
+# create model object and add layers
+hot_dog_model_baseline <- keras_model_sequential()%>%
+  layer_conv_2d(filters = 32,
+                kernel_size = c(3, 3), 
+                activation = 'relu',
+                input_shape = c(150, 150, 3)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_conv_2d(filters = 64,
+                kernel_size = c(3, 3),
+                activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_dropout(rate = 0.5) %>% 
+  layer_flatten() %>% 
+  layer_dense(units = 64, activation = 'relu') %>% 
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 1, activation = "sigmoid")  
+
+# compile model
+hot_dog_model_baseline %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = 'rmsprop',
+  metrics = c("accuracy")
+)
+
+# fit model
+# hot_dog_baseline_RDS <- hot_dog_model_baseline %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 20,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size # divide size of training dataset by batch size
+# )
+
+# save fit 
+# saveRDS(hot_dog_baseline_RDS, paste0(path, "data/hot_dog_baseline_RDS.rds"))
+hot_dog_baseline_RDS <- readRDS(paste0(path, "data/hot_dog_baseline_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_baseline, paste0(path, "data/hot_dog_model_baseline.h5"))
+
+# Recreate the exact same model purely from the file
+hot_dog_model_baseline <- load_model_hdf5(paste0(path, "data/hot_dog_model_baseline.h5"))
+
+# evaluate model
+hot_dog_model_baseline_eval <- as.data.frame(evaluate_generator(hot_dog_model_baseline, test_generator, steps = 10))
+```
+
+```{r}
+# plot training history of model
+plot(hot_dog_baseline_RDS) +
+  ggtitle('Training history of baseline convolutional image classifier') +
+  theme_bw() +
+  xlab('Epoch') +
+  ylab('')
+```
+
+The table below shows the test set performance of the baseline model which is close to a coin flip.
+
+```{r}
+# rename columns
+colnames(hot_dog_model_baseline_eval) <- 'Baseline model'
+
+# show test set performance
+knitr::kable(hot_dog_model_baseline_eval, caption = 'Test set performance of baseline convolutional image classifier') %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+Besides the baseline model I trained another model with four convolutional layers. The plot below shows its training history. Unlike the one before this does not show signs of overfitting.
+
+```{r, include=FALSE}
+### FINAL MODEL
+
+# create model object and add layers
+hot_dog_model_final <- keras_model_sequential()%>%
+  layer_conv_2d(filters = 32,
+                kernel_size = c(3, 3), 
+                activation = 'relu',
+                input_shape = c(150, 150, 3)) %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_conv_2d(filters = 32,
+                kernel_size = c(3, 3), 
+                activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_conv_2d(filters = 64,
+                kernel_size = c(3, 3), 
+                activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_conv_2d(filters = 16,
+                kernel_size = c(3, 3), 
+                activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_dropout(rate = 0.5) %>% 
+  layer_flatten() %>% 
+  layer_dense(units = 64, activation = 'relu') %>% 
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 1, activation = "sigmoid")   # for binary
+
+# compile model
+hot_dog_model_final %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = 'rmsprop',
+  metrics = c("accuracy")
+)
+
+# fit model
+# hot_dog_final_RDS <- hot_dog_model_final %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 20,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size, # divide size of training dataset by batch size
+#   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1) # if crossentropy loss plateaus, change LR
+# )
+
+# save fit 
+# saveRDS(hot_dog_final_RDS, paste0(path, "data/hot_dog_final_RDS.rds"))
+hot_dog_final_RDS <- readRDS(paste0(path, "data/hot_dog_final_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_final, paste0(path, "data/hot_dog_model_final.h5"))
+
+# import model
+hot_dog_model_final <- load_model_hdf5(paste0(path, "data/hot_dog_model_final.h5"))
+
+# evaluate model
+hot_dog_final_model_eval <- as.data.frame(evaluate_generator(hot_dog_model_final, test_generator, steps = 10))
+```
+
+```{r}
+# plot training history
+plot(hot_dog_final_RDS) +
+  ggtitle('Training history of final convolutional image classifier') +
+  theme_bw() +
+  xlab('Epoch') +
+  ylab('')
+```
+
+The table below shows the test set performance of this second model. We can conclude that the performances of both models are very poor.
+
+```{r}
+# rename columns
+colnames(hot_dog_final_model_eval) <- 'Final model'
+
+# show test set performance
+knitr::kable(hot_dog_final_model_eval, caption = 'Test set performance of final convolutional image classifier') %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### c. Could data augmentation techniques help with achieving higher predictive accuracy?
+
+Since the accuracy of the first two models was very poor I experimented with augmentation techniques to improve it. I estimated three models in total with different augmentation techniques. I applied rotation with varying angles, width and height shift, zooming, changing the brightness, flipping the images and setting the fill_mode to nearest so that empty pixels would be coloured based on the nearest pixels.
+
+The table below shows the validation set performances of the augmented models versus the final model chosen in the previous exercise. A larger angle for rotation and a larger value for zoom increased performance the most. The zoom parameter probably helped a lot because the hot dogs in many of the photos only account for a relatively small part of the picture.
+
+```{r, include=FALSE}
+# list to save model performances into
+model_eval_list <- list()
+
+# add validation performance of not augmented final model
+model_eval_list['final_model_no_augmentation'] <- as.data.frame(evaluate_generator(hot_dog_model_final, validation_generator, steps = 10))
+```
+
+```{r, include=FALSE}
+### FIRST DATA AUGMENTATION
+# set augmentation parameters
+train_datagen = image_data_generator(
+  rescale = 1/255,
+  rotation_range = 40,
+  width_shift_range = 0.2,
+  height_shift_range = 0.2,
+  shear_range = 0.2,
+  zoom_range = 0.2, 
+  horizontal_flip = TRUE,
+  fill_mode = "nearest"
+)
+
+# reinitialize training generator
+train_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/train"),  
+  train_datagen,              
+  target_size = image_size,  
+  batch_size = batch_size,
+  class_mode = "binary"       
+)
+
+# fit model
+# hot_dog_final_aug1_RDS <- hot_dog_model_final %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 20,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size, # divide size of training dataset by batch size
+#   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1) # if crossentropy loss plateaus, change LR
+# )
+
+# save fit
+# saveRDS(hot_dog_final_aug1_RDS, paste0(path,"data/hot_dog_final_aug1_RDS.rds"))
+hot_dog_final_aug1_RDS <- readRDS(paste0(path,"data/hot_dog_final_aug1_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_final, paste0(path, "data/hot_dog_model_aug1.h5"))
+
+# import model
+hot_dog_model_final <- load_model_hdf5(paste0(path, "data/hot_dog_model_aug1.h5"))
+
+# add performance to list
+model_eval_list['first_try_augmentation'] <- as.data.frame(evaluate_generator(hot_dog_model_final, validation_generator, steps = 10))
+```
+
+```{r, include=FALSE}
+### SECOND DATA AUGMENTATION
+
+# set augmentation parameters
+train_datagen = image_data_generator(
+  rescale = 1/255,
+  rotation_range = 90,
+  width_shift_range = 0.4,
+  height_shift_range = 0.4,
+  zoom_range = 0.5, 
+  brightness_range = c(1,1.5),
+  fill_mode = "nearest" 
+)
+
+# reinitialize training generator
+train_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/train"), 
+  train_datagen,              
+  target_size = image_size,  
+  batch_size = batch_size,
+  class_mode = "binary"       
+)
+
+# fit model
+# hot_dog_final_aug2_RDS <- hot_dog_model_final %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 20,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size, # divide size of training dataset by batch size
+#   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1) # if crossentropy loss plateaus, change LR
+# )
+
+# save fit
+# saveRDS(hot_dog_final_aug2_RDS, paste0(path, "data/hot_dog_final_aug2_RDS.rds"))
+hot_dog_final_aug2_RDS <- readRDS(paste0(path, "data/hot_dog_final_aug2_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_final, paste0(path, "data/hot_dog_model_aug2.h5"))
+
+# import model
+hot_dog_model_final <- load_model_hdf5(paste0(path, "data/hot_dog_model_aug2.h5"))
+
+# add performance to list
+model_eval_list['second_try_augmentation'] <- as.data.frame(evaluate_generator(hot_dog_model_final, validation_generator, steps = 10))
+```
+
+```{r, include=FALSE}
+### THIRD DATA AUGMENTATION
+
+# set augmentation parameters
+train_datagen = image_data_generator(
+  rescale = 1/255,
+  rotation_range = 10,
+  width_shift_range = 0.5,
+  height_shift_range = 0.5,
+  zoom_range = 0.1, 
+  brightness_range = c(1.5,2),
+  fill_mode = "wrap" 
+)
+
+# reinitialize training generator
+train_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/train"), 
+  train_datagen,              
+  target_size = image_size,  
+  batch_size = batch_size,
+  class_mode = "binary"       
+)
+
+# fit model
+# hot_dog_final_aug3_RDS <- hot_dog_model_final %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 20,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size, # divide size of training dataset by batch size
+#   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1) # if crossentropy loss plateaus, change LR
+# )
+
+# save fit
+# saveRDS(hot_dog_final_aug3_RDS, paste0(path, "data/hot_dog_final_aug3_RDS.rds"))
+hot_dog_final_aug3_RDS <- readRDS(paste0(path, "data/hot_dog_final_aug3_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_final, paste0(path, "data/hot_dog_model_aug3.h5"))
+
+# import model
+hot_dog_model_final <- load_model_hdf5(paste0(path, "data/hot_dog_model_aug3.h5"))
+
+# add performance to list
+model_eval_list['third_try_augmentation'] <- as.data.frame(evaluate_generator(hot_dog_model_final, validation_generator, steps = 10))
+```
+
+```{r}
+# turn performance list into dataframe
+model_eval_hot_dog <- as.data.frame(model_eval_list)
+
+# set row names
+row.names(model_eval_hot_dog) <- c('loss','accuracy')
+
+# set column names
+colnames(model_eval_hot_dog) <- c('Final model (no aug.)', 'Model 1 aug.', 'Model 2 aug.', 'Model 3 aug.')
+
+# create table
+knitr::kable(model_eval_hot_dog, caption = "Performance comparison of augmented and non-augmented networks", digits = 3 ) %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
+### d. Try to rely on some pre-built neural networks to aid prediction. Can you achieve a better performance using transfer learning for this problem?
+
+Even after applying augmentation techniques the performances of the models remained relatively low. So as a next step I used pre-trained networks to achieve a better performance. I also kept the best performing data augmentation settings. As for the pre-trained networks I used Inception V3 and Mobilenet. The first one was created by Google and has 21,802,784 parameters. The second one has 3,228,864 parameters. An important setting is to freeze the weights of these models so that they do not get recalculated during the training.
+
+```{r, include=FALSE}
+# set best data augmentation parameters
+train_datagen = image_data_generator(
+  rescale = 1/255,
+  rotation_range = 40,
+  width_shift_range = 0.2,
+  height_shift_range = 0.2,
+  shear_range = 0.2,
+  zoom_range = 0.2, 
+  horizontal_flip = TRUE,
+  fill_mode = "nearest"
+)
+
+# reinitialize training generator
+train_generator <- flow_images_from_directory(
+  file.path(path, "data/hot-dog-not-hot-dog/train"), 
+  train_datagen,              
+  target_size = image_size,  
+  batch_size = batch_size,
+  class_mode = "binary"       
+)
+```
+
+```{r, include=FALSE}
+##### FIRST MODEL
+
+# create the base pre-trained model
+conv_base <- application_inception_v3(
+  weights = "imagenet",
+  include_top = FALSE,
+  input_shape = c(image_size, 3)
+)
+
+# the pre-trained model has 21,802,784 parameters
+summary(conv_base)
+
+# freeze weights
+freeze_weights(conv_base)
+
+# add layers
+hot_dog_model_final_inceptionV3 <- keras_model_sequential()%>%
+  conv_base %>% 
+  layer_global_average_pooling_2d() %>% 
+  layer_dense(units = 16, activation = 'relu') %>% 
+  layer_dense(units = 1, activation = 'sigmoid')
+
+# compile model
+hot_dog_model_final_inceptionV3 %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = 'rmsprop',
+  metrics = c("accuracy")
+)
+
+# fit model
+# hot_dog_model_final_inceptionV3_RDS <- hot_dog_model_final_inceptionV3 %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 10,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size, # divide size of training dataset by batch size
+#   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1) # if crossentropy loss plateaus, change LR
+# )
+
+# save fit
+# saveRDS(hot_dog_model_final_inceptionV3_RDS, paste0( path, "data/hot_dog_model_final_inceptionV3_RDS.rds"))
+hot_dog_model_final_inceptionV3_RDS <- readRDS(paste0( path, "data/hot_dog_model_final_inceptionV3_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_final_inceptionV3, paste0(path, "data/hot_dog_model_final_inceptionV3.h5"))
+
+# import model
+hot_dog_model_final_inceptionV3 <- load_model_hdf5(paste0(path, "data/hot_dog_model_final_inceptionV3.h5"))
+
+# add model to list
+model_eval_list['final_conv_inceptionV3_augmented'] <- 
+  as.data.frame(evaluate_generator(hot_dog_model_final_inceptionV3, validation_generator, steps = 10))
+```
+
+```{r, include=FALSE}
+##### SECOND TRY
+
+# create the base pre-trained model
+base_model <- application_mobilenet(
+  weights = 'imagenet', 
+  include_top = FALSE,
+  input_shape = c(image_size, 3))
+
+# the pre-trained model has 3,228,864 parameters
+summary(base_model)
+
+# freeze weights
+freeze_weights(base_model)
+
+# add layers
+hot_dog_model_final_mobilenet <- keras_model_sequential()%>%
+  base_model %>% 
+  layer_global_average_pooling_2d() %>% 
+  layer_dense(units = 16, activation = 'relu') %>% 
+  layer_dense(units = 1, activation = 'sigmoid')
+
+# compile model
+hot_dog_model_final_mobilenet %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = 'rmsprop',
+  metrics = c("accuracy")
+)
+
+# fit model
+# hot_dog_model_final_mobilenet_RDS <- hot_dog_model_final_mobilenet %>% fit(
+#   train_generator,
+#   steps_per_epoch = 198 / batch_size, # divide size of training dataset by batch size
+#   epochs = 10,
+#   validation_data = validation_generator,
+#   validation_steps = 300 / batch_size, # divide size of training dataset by batch size
+#   callback_reduce_lr_on_plateau(monitor = "val_loss", factor = 0.1) # if crossentropy loss plateaus, change LR
+# )
+
+# save fit
+# saveRDS(hot_dog_model_final_mobilenet_RDS, paste0(path, "data/hot_dog_model_final_mobilenet_RDS.rds"))
+hot_dog_model_final_mobilenet_RDS <- readRDS(paste0(path, "data/hot_dog_model_final_mobilenet_RDS.rds"))
+
+# save model
+# save_model_hdf5(hot_dog_model_final_mobilenet, paste0(path, "data/hot_dog_model_final_mobilenet.h5"))
+
+# import model
+hot_dog_model_final_mobilenet <- load_model_hdf5(paste0(path, "data/hot_dog_model_final_mobilenet.h5"))
+
+# add model to list
+model_eval_list['final_conv_mobilenet_augmented'] <- 
+  as.data.frame(evaluate_generator(hot_dog_model_final_mobilenet, validation_generator, steps = 10))
+```
+
+The table below shows the validation set performances of all the image classifier models. We can conclude that data augmentation helped in achieving better performance but not for all augmented models. However, the most significant increase was achieved by using pre-trained networks.
+
+```{r}
+# final model comparison
+# create data frame from model comparison list
+model_eval_hot_dog <- as.data.frame(model_eval_list)
+
+# rename rows
+row.names(model_eval_hot_dog) <- c('loss','accuracy')
+
+# set column names
+colnames(model_eval_hot_dog) <- c('Final model (no aug.)', 'Model 1 aug.', 'Model 2 aug.', 'Model 3 aug.', 'Model inception v3', 'Model mobilenet')
+
+# create table
+knitr::kable(model_eval_hot_dog, caption = "Performance comparison of all image classifier models", digits = 3 ) %>% 
+  kable_styling( position = "center", latex_options = 'hold_position', bootstrap_options = c("striped", "hover"))
+```
+
