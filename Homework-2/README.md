@@ -1,3 +1,3 @@
 # Overview
 
-Homework 2 contained tasks about neural networks.
+Homework 2 contained tasks about neural networks and image recognition problems.
